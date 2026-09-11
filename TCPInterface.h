@@ -44,7 +44,14 @@
 #include <WiFi.h>
 #include <lwip/sockets.h>   // SO_LINGER — force RST to free lwIP PCBs immediately
 
-#define TCP_PORT 4242
+// Compile-time defaults; both are overridable at runtime through Provisioning.
+// TCP_HOST is empty by default so the client stays idle until provisioned.
+#ifndef TCP_PORT
+  #define TCP_PORT 4242
+#endif
+#ifndef TCP_HOST
+  #define TCP_HOST ""
+#endif
 #ifndef TCP_MAX_CLIENTS
   // Server mode only. Each slot costs a TCP_HW_MTU rx buffer plus lwIP's
   // per-PCB send/receive buffers.
@@ -78,7 +85,7 @@ extern bool wifi_initialized;
 // Read by start(), not the constructor, so values loaded by
 // init_provisioning() after the object exists still take effect.
 uint8_t  tcp_mode = TCP_MODE_CLIENT;
-char     tcp_host[64] = "";
+char     tcp_host[64] = TCP_HOST;
 uint16_t tcp_port = TCP_PORT;
 
 class TCPInterface : public RNS::InterfaceImpl {
