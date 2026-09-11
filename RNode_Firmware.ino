@@ -23,6 +23,9 @@
 #if defined(UDP_TRANSPORT)
 #include "UDPInterface.h"
 #endif
+#if defined(TCP_TRANSPORT)
+#include "TCPInterface.h"
+#endif
 #ifdef URTN_STATS_PAGES
 #include "Pages.h"
 #endif
@@ -215,6 +218,9 @@ RNS::Reticulum reticulum(RNS::Type::NONE);
 RNS::Interface lora_interface(RNS::Type::NONE);
 #if defined(UDP_TRANSPORT)
 RNS::Interface udp_interface(RNS::Type::NONE);
+#endif
+#if defined(TCP_TRANSPORT)
+RNS::Interface tcp_interface(RNS::Type::NONE);
 #endif
 #if defined(RNS_USE_FS)
   // CBA microStore
@@ -1027,6 +1033,14 @@ void setup() {
         udp_interface.mode(RNS::Type::Interface::MODE_GATEWAY);
       }
 #endif
+#if HAS_WIFI && defined(TCP_TRANSPORT)
+      if (wifi_mode != WR_WIFI_OFF) {
+        tcp_impl = new TCPInterface();
+        tcp_interface = tcp_impl;
+        // Provisioning default
+        tcp_interface.mode(RNS::Type::Interface::MODE_GATEWAY);
+      }
+#endif
 
       // Provisioning default
       reticulum.transport_enabled(true);
@@ -1074,6 +1088,13 @@ void setup() {
         TRACEF("UDPInterface hash: %s", udp_interface.get_hash().toHex().c_str());
       }
 #endif
+#if HAS_WIFI && defined(TCP_TRANSPORT)
+      if (wifi_mode != WR_WIFI_OFF) {
+        HEAD("Registering TCP Interface...", RNS::LOG_TRACE);
+        RNS::Transport::register_interface(tcp_interface);
+        TRACEF("TCPInterface hash: %s", tcp_interface.get_hash().toHex().c_str());
+      }
+#endif
 
       HEAD("Creating Reticulum instance...", RNS::LOG_TRACE);
       reticulum = RNS::Reticulum();
@@ -1085,6 +1106,16 @@ printf("[init] op_mode: %U\n", op_mode);
         reticulum.transport_enabled(false);
       }
       reticulum.start();
+
+#if HAS_WIFI && defined(TCP_TRANSPORT)
+      // WiFi came up in wifi_remote_init() before this interface existed, so
+      // wifi_remote_start() could not start it. Provisioning has now loaded
+      // tcp_mode/tcp_host/tcp_port, so start it here; start() is idempotent
+      // and wifi_remote_start() handles later WiFi restarts.
+      if (tcp_interface && wifi_initialized) {
+        tcp_interface.start();
+      }
+#endif
 
       // Set loop callback only after the Reticulum instance is started
       // (to avoid looping without a completely initialized instance)
