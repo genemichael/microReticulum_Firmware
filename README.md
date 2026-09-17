@@ -2,6 +2,17 @@
 
 Fork of RNode_Firmware with integration of the [microReticulum](https://github.com/attermann/microReticulum) Network Stack to implement a completeley self-contained standalone Reticulum node.
 
+## About this fork
+
+This is Gene Lauria's working copy of [attermann/microReticulum_Firmware](https://github.com/attermann/microReticulum_Firmware). Differences from upstream, all submitted back as PRs:
+
+- **TCP interface** (`-DTCP_TRANSPORT`, `TCPInterface.h`): client or server Reticulum-over-TCP on WiFi boards. Setup in [docs/Setup.md](docs/Setup.md). Upstream PR: attermann/microReticulum_Firmware#114.
+- **microStore compaction fix**: the `heltec_wifi_lora_32_V3`, `heltec_wifi_lora_32_V4`, `wiscore_rak4631` and `ttgo-t-beam-supreme` envs pull microStore from `genemichael/microStore#fix/compact-close-active-segment` until attermann/microStore#11 merges. Without it, every threshold compaction of the packet hashlist fails to delete the open active segment (`esp_littlefs: Failed to unlink ... Has open FD`). The RAK4631's external RAK15001 / W25Q128 flash is unaffected in behaviour; it goes through the same store code and gets the same fix.
+- **`heltec_wifi_lora_32_V4-quiet`** env: logging compiled down to INFO and the packet hashlist raised to 1000 records, for boards relaying sustained link traffic.
+- WiFi interfaces are only created when WiFi mode is Station or AP, and an erased WiFi mode byte is normalized to Off on every EEPROM board.
+
+Releases on this repo are built from `master` for those four boards.
+
 ## Installation
 
 This firmware can be easily installed on devices in the same way as RNode using the new `fw-url` switch to `rnodeconf` which allows firmware images to be pulled from an alternate repository. RNS may need to be updated to the latest version to use this new switch.
