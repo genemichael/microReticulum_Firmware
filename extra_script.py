@@ -122,21 +122,24 @@ def device_wipe(env):
     print("--- Wiping Device ---")
     env.Execute("rnodeconf --eeprom-wipe " + env.subst("$UPLOAD_PORT"))
 
-def device_set_firmware_hash(firmware_hash, env):
+def device_set_firmware_hash(firmware_hash, env, boot_wait=4.0):
     import serial
 
     port_path = env.subst("$UPLOAD_PORT")
     frame = firmware_hash_kiss_frame(firmware_hash)
-    print("Writing firmware hash directly over KISS for unsupported rnodeconf model...")
+    print("Writing firmware hash directly over KISS (boot wait %.0fs)..." % boot_wait)
     with serial.Serial(port_path, 115200, timeout=0.1) as port:
-        # Opening native USB resets the Tracker V2. Drain startup output and
-        # wait until setup() has reached the serial command loop.
-        ready_at = time.monotonic() + 4.0
+        # Opening the port resets boards with native USB (Tracker V2, S3
+        # boards) and USB-UART bridges alike. Drain startup output and wait
+        # until setup() has reached the serial command loop; with trace
+        # logging over a 115200-baud UART that can take well over 5 s.
+        ready_at = time.monotonic() + boot_wait
         while time.monotonic() < ready_at:
             port.read(4096)
-        port.write(frame)
-        port.flush()
-        time.sleep(1)
+        for _ in range(2):
+            port.write(frame)
+            port.flush()
+            time.sleep(1)
 
 def device_provision(env):
     # Device provision
@@ -154,6 +157,9 @@ def device_provision(env):
             env.Execute("rnodeconf --product b1 --model b9 --hwrev 1 --rom " + env.subst("$UPLOAD_PORT"))
         case "heltec32v4pa" | "heltec32v4pa_local":
             env.Execute("rnodeconf --product c3 --model c8 --hwrev 1 --rom " + env.subst("$UPLOAD_PORT"))
+        case "heltec32v3" | "heltec32v3_local":
+            # 915 MHz SX1262 variant (model 0xCA); 433 MHz boards are 0xC5.
+            env.Execute("rnodeconf --product c1 --model ca --hwrev 1 --rom " + env.subst("$UPLOAD_PORT"))
         case "heltec_tracker_v2" | "heltec_tracker_v2_local":
             env.Execute("rnodeconf --product c4 --model cb --hwrev 1 --rom " + env.subst("$UPLOAD_PORT"))
         case "rak4631" | "rak4631_local":
@@ -201,7 +207,13 @@ def firmware_hash(source, env):
             hex_hash = calc_hash.hex()
             print("firmware_hash:", hex_hash)
             if calc_hash == part_hash:
-                env.Execute("rnodeconf --firmware-hash " + hex_hash + " " + env.subst("$UPLOAD_PORT"))
+                # rnodeconf sends one DETECT ~3 s after opening the port, which
+                # resets UART-bridge boards; microReticulum is often still
+                # booting then. Fall back to a raw KISS write with a long wait.
+                rc = env.Execute("rnodeconf --firmware-hash " + hex_hash + " " + env.subst("$UPLOAD_PORT"))
+                if rc != 0:
+                    print("rnodeconf could not set the firmware hash, retrying over raw KISS...")
+                    device_set_firmware_hash(calc_hash, env, boot_wait=12.0)
             else:
                 print("Calculated hash does not match!")
 
