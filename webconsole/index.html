@@ -2578,15 +2578,39 @@ async function doConnect(){
   }
 }
 
+// Boards on a USB-UART bridge (Heltec V3, T-Beam, ...) reset when the port is
+// opened and take several seconds to reach their command loop, so the first
+// Provisioning requests after connect can time out while the board is still
+// booting. Retry timeouts a few times before giving up; other errors (a real
+// Error response, transport closed) surface immediately.
+const BOOT_RETRY_ATTEMPTS = 5;
+const BOOT_RETRY_DELAY_MS = 3000;
+async function withBootRetry(label, fn){
+  let lastErr = null;
+  for (let attempt = 1; attempt <= BOOT_RETRY_ATTEMPTS; attempt++) {
+    try { return await fn(); }
+    catch (e) {
+      lastErr = e;
+      const timedOut = /timed out/i.test(String(e && e.message));
+      const connected = state.conn.get().state === 'connected';
+      if (!timedOut || !connected || attempt === BOOT_RETRY_ATTEMPTS) throw e;
+      console.warn(`${label}: timed out (attempt ${attempt}/${BOOT_RETRY_ATTEMPTS}), device may still be booting; retrying`);
+      if (attempt === 1) showToast('Device not responding yet, waiting for it to finish booting…', 'info');
+      await new Promise(r => setTimeout(r, BOOT_RETRY_DELAY_MS));
+    }
+  }
+  throw lastErr;
+}
+
 async function afterConnect(){
   // Switch to Node Status immediately so the tab change confirms the
   // connection to the user; the tab body handles its own "waiting for status
   // frames…" placeholder while the async fetches below complete. Guarded so
   // we don't yank users off a tab they navigated to intentionally.
   if (state.activeTab.get() === 'settings') state.activeTab.set('status');
-  try { state.info.set(await client.getInfo()); } catch (e) { console.error('getInfo:', e); showToast('Failed to fetch device info: ' + e.message, 'err'); }
+  try { state.info.set(await withBootRetry('getInfo', () => client.getInfo())); } catch (e) { console.error('getInfo:', e); showToast('Failed to fetch device info: ' + e.message, 'err'); }
   try {
-    const schema = await client.resolveSchema(state.info.get());
+    const schema = await withBootRetry('resolveSchema', () => client.resolveSchema(state.info.get()));
     state.schema.set(schema);
     if (schema.namespaces.length > 0 && state.activeNsTab.get() == null) {
       // Default to the first ROOT namespace (parentId == 0) — children render

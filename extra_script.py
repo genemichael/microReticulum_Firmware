@@ -83,6 +83,7 @@ def post_upload(source, target, env):
     board = env.GetProjectOption("board")
     if ("espressif32" in platform):
         time.sleep(10)
+        verify_upload(source, env)
         # device provisioning is incomplete and only currently appropriate for 915MHz T-Beam
         #device_wipe(env)
         device_provision(env)
@@ -91,6 +92,7 @@ def post_upload(source, target, env):
         #firmware_package(env)
     elif ("nordicnrf52" in platform):
         time.sleep(10)
+        verify_upload(source, env)
         # device provisioning is incomplete and only currently appropriate for 915MHz RAK4631
         #device_wipe(env)
         device_provision(env)
@@ -140,6 +142,82 @@ def device_set_firmware_hash(firmware_hash, env, boot_wait=4.0):
             port.write(frame)
             port.flush()
             time.sleep(1)
+
+
+def expected_image_hash(source, env):
+    """Return the SHA-256 (bytes) the device will report for the image that was
+    just uploaded, computed the same way the firmware does, or None."""
+    source_file = source[0].get_abspath()
+    platform = env.GetProjectOption("platform")
+    if platform == "nordicnrf52":
+        build_dir = env.subst("$BUILD_DIR")
+        env.Execute("cd " + build_dir + "; unzip -o " + source_file + " " + env.subst("$PROGNAME") + ".bin")
+        data = open(build_dir + "/" + env.subst("$PROGNAME") + ".bin", "rb").read()
+        return hashlib.sha256(data).digest()
+    data = open(source_file, "rb").read()
+    if env.GetProjectOption("custom_variant") in ("heltec_tracker_v2", "heltec_tracker_v2_local"):
+        try:
+            return esp_image_sha256(data)
+        except ValueError:
+            return None
+    # ESP32 app images end with their own 32-byte SHA-256 over everything before it,
+    # which is also what esp_partition_get_sha256() reports for the running app.
+    return hashlib.sha256(data[0:-32]).digest()
+
+def device_read_running_hash(env, boot_wait=12.0):
+    """Ask the board for the SHA-256 of the firmware it is actually running
+    (KISS CMD_HASHES 0x02). Returns 32 bytes, or None if it did not answer."""
+    import serial
+    FEND, FESC, TFEND, TFESC = 0xC0, 0xDB, 0xDC, 0xDD
+    port_path = env.subst("$UPLOAD_PORT")
+    try:
+        # DTR asserted on open: nRF52 native-USB boards only emit with DTR set;
+        # UART-bridge boards reset on open, which boot_wait absorbs.
+        with serial.Serial(port_path, 115200, timeout=0.2) as port:
+            ready_at = time.monotonic() + boot_wait
+            while time.monotonic() < ready_at:
+                port.read(4096)
+            for _ in range(5):
+                port.reset_input_buffer()
+                port.write(bytes([FEND, 0x60, 0x02, FEND]))
+                port.flush()
+                deadline = time.monotonic() + 2.0
+                buf = b""
+                while time.monotonic() < deadline:
+                    buf += port.read(4096)
+                for frame in buf.split(bytes([FEND])):
+                    if len(frame) >= 3 and frame[0] == 0x60 and frame[1] == 0x02:
+                        body = frame[2:].replace(bytes([FESC, TFEND]), bytes([FEND])).replace(bytes([FESC, TFESC]), bytes([FESC]))
+                        if len(body) == 32:
+                            return body
+    except Exception as error:
+        print("Could not read running firmware hash:", error)
+    return None
+
+def verify_upload(source, env):
+    """Confirm the board is really running the image we just uploaded. A DFU or
+    esptool session can fail (for example when another program holds the
+    serial port) while the rest of the post-upload steps still succeed, which
+    used to end in a misleading SUCCESS."""
+    print("--- Verifying Upload ---")
+    expected = expected_image_hash(source, env)
+    if expected is None:
+        print("Cannot compute expected image hash for this target; skipping verification.")
+        return
+    running = device_read_running_hash(env)
+    if running is None:
+        print("WARNING: board did not report its running firmware hash; upload NOT verified.")
+        return
+    print("expected:", expected.hex())
+    print("running: ", running.hex())
+    if running != expected:
+        print("")
+        print("*** UPLOAD DID NOT LAND: the board is still running a different image. ***")
+        print("*** Check that no other program (RNode Console, a monitor) holds the  ***")
+        print("*** serial port, then flash again. Skipping provisioning and hash.     ***")
+        print("")
+        env.Exit(1)
+    print("Upload verified: board is running the new image.")
 
 def device_provision(env):
     # Device provision
